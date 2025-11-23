@@ -49,6 +49,8 @@ exports.protect = async (req, res, next) => {
 };
 
 exports.authorize = (...roles) => {
+  console.log("afin asat", roles);
+  
   return (req, res, next) => {
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({

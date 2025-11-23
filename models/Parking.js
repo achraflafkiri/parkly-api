@@ -80,5 +80,25 @@ const parkingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Add this to your Parking model (models/Parking.js)
+parkingSchema.methods.checkAvailability = async function(startTime, duration) {
+  const Booking = mongoose.model('Booking');
+  const endTime = new Date(startTime.getTime() + duration * 60 * 60 * 1000);
+  
+  const activeBookings = await Booking.countDocuments({
+    parking: this._id,
+    status: { $in: ['confirmed', 'active'] },
+    $or: [
+      { startTime: { $lt: endTime }, endTime: { $gt: startTime } }
+    ]
+  });
+
+  return {
+    available: activeBookings < this.totalSpots,
+    availableSpots: this.totalSpots - activeBookings,
+    totalSpots: this.totalSpots
+  };
+};
+
 const Parking = mongoose.model('Parking', parkingSchema);
 module.exports = Parking;

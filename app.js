@@ -34,6 +34,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/v1/auth', require('./routes/auth'));
 app.use('/api/v1/users', require('./routes/user'));
 app.use('/api/v1/parkings', require('./routes/parking'));
+app.use('/api/v1/bookings', require('./routes/booking'));
 
 // Error handling middleware
 app.use((error, req, res, next) => {
@@ -103,7 +104,7 @@ const startServer = async () => {
   await connectDB();
 
   app.listen(PORT, () => {
-    console.log(`🚗 API Base URL: http://localhost:${PORT}/api`);
+    console.log(`🚗 API Base URL: http://localhost:${PORT}/api/v1`);
   });
 };
 

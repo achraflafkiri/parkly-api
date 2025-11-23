@@ -8,31 +8,37 @@ const { uploadParkingImages, handleUploadError } = require('../middleware/upload
 // 🟢 Public/Driver Routes
 router
   .route('/')
-  .get(protect, parkingController.getAllParkings); 
-  // Only drivers can see available parkings
+  .get(parkingController.getAllParkings);
+// Only drivers can see available parkings
 
 // 🟠 Owner Routes
 router
+  .route('/my-parkings')
+  .get(protect, authorize('owner'), parkingController.getAllMyParkings); // Add authorize middleware
+  
+router
   .route('/')
   .post(
-    protect, 
-    authorize('owner'), 
-    uploadParkingImages, 
+    protect,
+    authorize('owner'),
+    uploadParkingImages,
     handleUploadError,
     parkingController.createParking
-  ); 
-  // Only owners can create parkings
+  );
+// Only owners can create parkings
 
 router
   .route('/:id')
   .get(protect, parkingController.getParkingById) // Both driver or owner can view a parking
   .put(
-    protect, 
-    authorize('owner'), 
-    uploadParkingImages, 
+    protect,
+    authorize('owner'),
+    uploadParkingImages,
     handleUploadError,
     parkingController.updateParking
   ) // Only owner can edit his own
   .delete(protect, authorize('owner'), parkingController.deleteParking); // Only owner can delete his own
+
+router.get('/:id/availability', protect, parkingController.checkParkingAvailability);
 
 module.exports = router;
