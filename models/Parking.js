@@ -1,4 +1,3 @@
-// models/Parking.js
 const mongoose = require('mongoose');
 
 const imageSchema = new mongoose.Schema({
@@ -34,6 +33,26 @@ const parkingSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Please provide the city'],
     },
+    // Added location field
+    location: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        required: [true, 'Please provide coordinates'],
+        validate: {
+          validator: function(coords) {
+            return coords.length === 2 && 
+                   coords[0] >= -180 && coords[0] <= 180 && // longitude
+                   coords[1] >= -90 && coords[1] <= 90;     // latitude
+          },
+          message: 'Invalid coordinates format'
+        }
+      }
+    },
     zone: {
       type: String,
       enum: ['A', 'B', 'C', 'D'],
@@ -62,7 +81,7 @@ const parkingSchema = new mongoose.Schema(
       enum: ['security', 'ev', 'covered', 'lighting', 'exposed'],
       default: [],
     },
-    images: [imageSchema], // Changed from [String] to array of image objects
+    images: [imageSchema],
     openingHours: {
       open24: { type: Boolean, default: true },
       openTime: { type: String, default: '08:00' },
@@ -80,7 +99,10 @@ const parkingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Add this to your Parking model (models/Parking.js)
+// Create geospatial index for location-based queries
+parkingSchema.index({ location: '2dsphere' });
+
+// Add method to check availability
 parkingSchema.methods.checkAvailability = async function(startTime, duration) {
   const Booking = mongoose.model('Booking');
   const endTime = new Date(startTime.getTime() + duration * 60 * 60 * 1000);

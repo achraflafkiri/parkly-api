@@ -35,6 +35,7 @@ app.use('/api/v1/auth', require('./routes/auth'));
 app.use('/api/v1/users', require('./routes/user'));
 app.use('/api/v1/parkings', require('./routes/parking'));
 app.use('/api/v1/bookings', require('./routes/booking'));
+app.use('/api/v1/notifications', require('./routes/notification'));
 
 // Error handling middleware
 app.use((error, req, res, next) => {

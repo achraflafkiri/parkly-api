@@ -1,5 +1,8 @@
+// controllers/bookingController.js
 const Booking = require('../models/Booking');
 const Parking = require('../models/Parking');
+const Notification = require('../models/Notification');
+const User = require('../models/User');
 const catchAsync = require('../utils/catchAsync');
 const AppError = require('../utils/AppError');
 
@@ -33,7 +36,7 @@ exports.createBooking = catchAsync(async (req, res, next) => {
   // Check availability
   const startTimeDate = new Date(startTime);
   const conflictingBookings = await Booking.checkAvailability(parkingId, startTimeDate, duration);
-  
+
   if (conflictingBookings >= parking.totalSpots) {
     return next(new AppError(400, 'Parking is not available for the selected time slot'));
   }
@@ -58,8 +61,34 @@ exports.createBooking = catchAsync(async (req, res, next) => {
   await booking.save();
 
   // Populate booking data
-  await booking.populate('parking', 'name address city zone type pricePerHour');
+  await booking.populate('parking', 'name address city zone type pricePerHour owner');
   await booking.populate('user', 'name email phone');
+
+  // ✅ Send notification to parking owner
+  try {
+    // Create notification for the parking owner
+    const notification = await Notification.create({
+      user: parking.owner, // This is the owner's user ID
+      title: 'تم استلام حجز جديد! 🎉',
+      message: `لديك حجز جديد لـ ${parking.name}. السائق: ${booking.user.name}, وقت البدء: ${new Date(booking.startTime).toLocaleString()}, المدة: ${duration} ساعة`,
+      type: 'booking_created',
+      relatedBooking: booking._id,
+      metadata: {
+        parkingId: parking._id,
+        parkingName: parking.name,
+        driverName: booking.user.name,
+        startTime: booking.startTime,
+        duration: booking.duration,
+        totalAmount: booking.totalAmount,
+      }
+    });
+
+    console.log('📧 Notification sent to parking owner:', notification.message);
+
+  } catch (notificationError) {
+    console.error('Failed to send notification to owner:', notificationError);
+    // Don't throw error - booking should still be created successfully
+  }
 
   res.status(201).json({
     success: true,
@@ -71,7 +100,7 @@ exports.createBooking = catchAsync(async (req, res, next) => {
 // Get user's bookings
 exports.getUserBookings = catchAsync(async (req, res, next) => {
   const { status, page = 1, limit = 10 } = req.query;
-  
+
   const filter = { user: req.user.id };
   if (status && status !== 'all') {
     filter.status = status;
@@ -105,8 +134,8 @@ exports.getBookingById = catchAsync(async (req, res, next) => {
   }
 
   // Check if user owns the booking or is parking owner
-  if (booking.user._id.toString() !== req.user.id && 
-      booking.parking.owner._id.toString() !== req.user.id) {
+  if (booking.user._id.toString() !== req.user.id &&
+    booking.parking.owner._id.toString() !== req.user.id) {
     return next(new AppError(403, 'Access denied to this booking'));
   }
 
@@ -131,18 +160,18 @@ exports.updateBookingStatus = catchAsync(async (req, res, next) => {
   }
 
   // Check permissions
-  if (booking.user.toString() !== req.user.id && 
-      !req.user.role.includes('owner')) {
+  if (booking.user.toString() !== req.user.id &&
+    !req.user.role.includes('owner')) {
     return next(new AppError(403, 'Access denied to update this booking'));
   }
 
   booking.status = status;
-  
+
   // If marking as active, validate start time
   if (status === 'active') {
     const now = new Date();
     const bufferTime = 30 * 60 * 1000; // 30 minutes buffer
-    
+
     if (booking.startTime > new Date(now.getTime() + bufferTime)) {
       return next(new AppError(400, 'Cannot activate booking too early'));
     }
@@ -167,7 +196,7 @@ exports.extendBooking = catchAsync(async (req, res, next) => {
 
   const booking = await Booking.findById(req.params.id)
     .populate('parking', 'pricePerHour totalSpots');
-  
+
   if (!booking) {
     return next(new AppError(404, 'Booking not found'));
   }
@@ -183,8 +212,8 @@ exports.extendBooking = catchAsync(async (req, res, next) => {
   // Check availability for extension
   const newEndTime = new Date(booking.endTime.getTime() + additionalHours * 60 * 60 * 1000);
   const conflictingBookings = await Booking.checkAvailability(
-    booking.parking._id, 
-    booking.endTime, 
+    booking.parking._id,
+    booking.endTime,
     additionalHours
   );
 
@@ -217,7 +246,7 @@ exports.extendBooking = catchAsync(async (req, res, next) => {
 // Cancel booking
 exports.cancelBooking = catchAsync(async (req, res, next) => {
   const booking = await Booking.findById(req.params.id);
-  
+
   if (!booking) {
     return next(new AppError(404, 'Booking not found'));
   }
@@ -229,7 +258,7 @@ exports.cancelBooking = catchAsync(async (req, res, next) => {
   // Check if booking can be cancelled (e.g., not too close to start time)
   const now = new Date();
   const hoursUntilStart = (booking.startTime - now) / (1000 * 60 * 60);
-  
+
   if (hoursUntilStart < 1) {
     return next(new AppError(400, 'Cannot cancel booking less than 1 hour before start time'));
   }
@@ -251,7 +280,7 @@ exports.cancelBooking = catchAsync(async (req, res, next) => {
 // Get parking owner's bookings
 exports.getOwnerBookings = catchAsync(async (req, res, next) => {
   const { status, page = 1, limit = 10 } = req.query;
-  
+
   // Find parkings owned by this user
   const userParkings = await Parking.find({ owner: req.user.id }).select('_id');
   const parkingIds = userParkings.map(p => p._id);
@@ -316,7 +345,7 @@ exports.scanBooking = catchAsync(async (req, res, next) => {
 
 exports.getBookingsByParking = catchAsync(async (req, res, next) => {
   const { parkingId } = req.params;
-  
+
   const bookings = await Booking.find({ parking: parkingId })
     .populate('user', 'name email phone')
     .populate('parking')
@@ -347,7 +376,7 @@ exports.markAsArrived = catchAsync(async (req, res, next) => {
   // Validate if booking can be marked as arrived
   const now = new Date();
   const bufferTime = 30 * 60 * 1000; // 30 minutes buffer
-  
+
   // Can mark as arrived up to 30 minutes before start time
   if (booking.startTime > new Date(now.getTime() + bufferTime)) {
     return next(new AppError(400, 'Cannot mark as arrived more than 30 minutes before start time'));
@@ -406,7 +435,7 @@ exports.confirmBooking = catchAsync(async (req, res, next) => {
   }
 
   const now = new Date();
-  
+
   // Validate time (can confirm up to 30 minutes before start time)
   if (booking.startTime > new Date(now.getTime() + (30 * 60 * 1000))) {
     return next(new AppError(400, 'Cannot confirm booking more than 30 minutes before start time'));
@@ -415,6 +444,27 @@ exports.confirmBooking = catchAsync(async (req, res, next) => {
   booking.isConfirmed = true;
   booking.status = 'active'; // Change status to active when confirmed by owner
   await booking.save();
+
+  // ✅ Send notification to driver
+  try {
+    const notification = await Notification.create({
+      user: booking.user._id, // This is the driver's user ID
+      title: 'Booking Confirmed! ✅',
+      message: `Your booking for ${booking.parking.name} has been confirmed by the owner. You can now proceed to the parking location.`,
+      type: 'booking_confirmed',
+      relatedBooking: booking._id,
+      metadata: {
+        parkingId: booking.parking._id,
+        parkingName: booking.parking.name,
+        isConfirmed: true,
+      }
+    });
+
+    console.log('📧 Booking confirmation notification sent to driver');
+
+  } catch (notificationError) {
+    console.error('Failed to send confirmation notification:', notificationError);
+  }
 
   res.status(200).json({
     success: true,
@@ -434,8 +484,8 @@ exports.getBookingStatus = catchAsync(async (req, res, next) => {
   }
 
   // Check if user has access to this booking
-  if (booking.user._id.toString() !== req.user.id && 
-      booking.parking.owner.toString() !== req.user.id) {
+  if (booking.user._id.toString() !== req.user.id &&
+    booking.parking.owner.toString() !== req.user.id) {
     return next(new AppError(403, 'Access denied to this booking'));
   }
 
@@ -447,13 +497,13 @@ exports.getBookingStatus = catchAsync(async (req, res, next) => {
         isArrived: booking.isArrived,
         isConfirmed: booking.isConfirmed,
         status: booking.status,
-        canMarkArrived: booking.user._id.toString() === req.user.id && 
-                       !booking.isArrived && 
-                       booking.status === 'confirmed',
-        canConfirm: booking.parking.owner.toString() === req.user.id && 
-                   !booking.isConfirmed && 
-                   booking.isArrived &&
-                   booking.status === 'confirmed'
+        canMarkArrived: booking.user._id.toString() === req.user.id &&
+          !booking.isArrived &&
+          booking.status === 'confirmed',
+        canConfirm: booking.parking.owner.toString() === req.user.id &&
+          !booking.isConfirmed &&
+          booking.isArrived &&
+          booking.status === 'confirmed'
       }
     },
   });

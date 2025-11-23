@@ -14,6 +14,8 @@ exports.createParking = catchAsync(async (req, res, next) => {
         name,
         address,
         city,
+        latitude,
+        longitude,
         zone,
         type,
         totalSpots,
@@ -26,6 +28,22 @@ exports.createParking = catchAsync(async (req, res, next) => {
 
     if (!req.user || !req.user.id) {
         return next(new AppError(401, 'Unauthorized. Please log in.'));
+    }
+
+    // Validate coordinates
+    if (!latitude || !longitude) {
+        return next(new AppError(400, 'Location coordinates are required'));
+    }
+
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+
+    if (isNaN(lat) || isNaN(lng)) {
+        return next(new AppError(400, 'Invalid coordinates format'));
+    }
+
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return next(new AppError(400, 'Coordinates out of valid range'));
     }
 
     // Handle features array
@@ -52,7 +70,7 @@ exports.createParking = catchAsync(async (req, res, next) => {
         }
     }
 
-    // Handle uploaded images - Upload to Cloudinary
+    // Handle uploaded images
     let cloudinaryImages = [];
     if (req.files && req.files.length > 0) {
         console.log('Uploading', req.files.length, 'images to Cloudinary...');
@@ -65,12 +83,16 @@ exports.createParking = catchAsync(async (req, res, next) => {
         }
     }
 
-    // Create parking with Cloudinary image URLs
+    // Create parking with location
     const parking = await Parking.create({
         owner: req.user.id,
         name,
         address,
         city,
+        location: {
+            type: 'Point',
+            coordinates: [lng, lat] // [longitude, latitude] - GeoJSON format
+        },
         zone,
         type,
         totalSpots: parseInt(totalSpots),
@@ -82,7 +104,7 @@ exports.createParking = catchAsync(async (req, res, next) => {
         contactPhone,
     });
 
-    console.log('Parking created with images:', parking.images);
+    console.log('Parking created with location:', parking.location);
 
     res.status(201).json({
         success: true,
@@ -111,14 +133,13 @@ exports.updateParking = catchAsync(async (req, res, next) => {
             console.log('Existing images to keep:', existingImages);
         } catch (error) {
             console.error('Failed to parse existing images:', error);
-            existingImages = parking.images; // Fallback to current images
+            existingImages = parking.images;
         }
     } else {
-        // If no existingImages provided, keep all current images
         existingImages = parking.images;
     }
 
-    // Find images to delete (images that were in parking but not in existingImages)
+    // Find images to delete
     const imagesToDelete = parking.images.filter(
         img => !existingImages.find(ei => ei._id && ei._id.toString() === img._id.toString())
     );
@@ -150,7 +171,6 @@ exports.updateParking = catchAsync(async (req, res, next) => {
         }
     }
 
-    // Combine existing images with new ones
     const updatedImages = [...existingImages, ...newCloudinaryImages];
 
     // Handle features array
@@ -177,11 +197,28 @@ exports.updateParking = catchAsync(async (req, res, next) => {
         }
     }
 
+    // Handle location update
+    let locationObj = parking.location;
+    if (req.body.latitude && req.body.longitude) {
+        const lat = parseFloat(req.body.latitude);
+        const lng = parseFloat(req.body.longitude);
+        
+        if (!isNaN(lat) && !isNaN(lng)) {
+            if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                locationObj = {
+                    type: 'Point',
+                    coordinates: [lng, lat]
+                };
+            }
+        }
+    }
+
     // Update parking fields
     const updateData = {
         name: req.body.name || parking.name,
         address: req.body.address || parking.address,
         city: req.body.city || parking.city,
+        location: locationObj,
         zone: req.body.zone || parking.zone,
         type: req.body.type || parking.type,
         totalSpots: req.body.totalSpots ? parseInt(req.body.totalSpots) : parking.totalSpots,
@@ -269,7 +306,6 @@ exports.deleteParkingImage = catchAsync(async (req, res, next) => {
     const image = parking.images.id(imageId);
     if (!image) return next(new AppError(404, 'Image not found'));
 
-    // Delete from Cloudinary
     try {
         await deleteFromCloudinary(image.public_id);
         console.log('Image deleted from Cloudinary:', image.public_id);
@@ -278,7 +314,6 @@ exports.deleteParkingImage = catchAsync(async (req, res, next) => {
         return next(new AppError(500, 'Failed to delete image from storage'));
     }
 
-    // Remove from parking images array
     parking.images.pull(imageId);
     await parking.save();
 
