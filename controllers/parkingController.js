@@ -228,6 +228,7 @@ exports.updateParking = catchAsync(async (req, res, next) => {
         images: updatedImages,
         openingHours: openingHoursObj,
         contactPhone: req.body.contactPhone || parking.contactPhone,
+        isPublic: req.body.isPublic,
     };
 
     Object.assign(parking, updateData);
@@ -244,7 +245,7 @@ exports.updateParking = catchAsync(async (req, res, next) => {
 
 // Get all available parkings
 exports.getAllParkings = catchAsync(async (req, res, next) => {
-    const parkings = await Parking.find({ isAvailable: true }).populate('owner', 'name email phone');
+    const parkings = await Parking.find({ isAvailable: true, isPublic: true }).populate('owner', 'name email phone');
     res.status(200).json({
         success: true,
         count: parkings.length,

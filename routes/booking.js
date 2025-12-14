@@ -18,10 +18,11 @@ router.patch('/:id/arrived', authorize('user', 'driver'), bookingController.mark
 router.get('/owner/my-bookings', authorize('owner'), bookingController.getOwnerBookings);
 router.patch('/:id/status', authorize('owner'), bookingController.updateBookingStatus);
 router.post('/scan', authorize('owner'), bookingController.scanBooking);
-router.patch('/:id/confirm', authorize('owner'), bookingController.confirmBooking); // Owner confirms
+router.patch('/:id/confirm', authorize('owner'), bookingController.confirmBooking); // Owner confirms & starts timer
+router.patch('/:id/complete', authorize('owner'), bookingController.completeBooking); // ✅ Owner completes booking
 
 // 🔵 Shared Routes (both driver and owner can access)
-router.get('/:id/status', bookingController.getBookingStatus); // Check booking status
+router.get('/:id/status', bookingController.getBookingStatus); // Check booking status with timer info
 
 router.get('/parking/:parkingId', protect, bookingController.getBookingsByParking);
 

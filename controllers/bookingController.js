@@ -1,4 +1,3 @@
-// controllers/bookingController.js
 const Booking = require('../models/Booking');
 const Parking = require('../models/Parking');
 const Notification = require('../models/Notification');
@@ -66,9 +65,8 @@ exports.createBooking = catchAsync(async (req, res, next) => {
 
   // ✅ Send notification to parking owner
   try {
-    // Create notification for the parking owner
     const notification = await Notification.create({
-      user: parking.owner, // This is the owner's user ID
+      user: parking.owner,
       title: 'تم استلام حجز جديد! 🎉',
       message: `لديك حجز جديد لـ ${parking.name}. السائق: ${booking.user.name}, وقت البدء: ${new Date(booking.startTime).toLocaleString()}, المدة: ${duration} ساعة`,
       type: 'booking_created',
@@ -87,7 +85,6 @@ exports.createBooking = catchAsync(async (req, res, next) => {
 
   } catch (notificationError) {
     console.error('Failed to send notification to owner:', notificationError);
-    // Don't throw error - booking should still be created successfully
   }
 
   res.status(201).json({
@@ -358,7 +355,6 @@ exports.getBookingsByParking = catchAsync(async (req, res, next) => {
   });
 });
 
-
 // Driver marks themselves as arrived
 exports.markAsArrived = catchAsync(async (req, res, next) => {
   const booking = await Booking.findById(req.params.id)
@@ -405,10 +401,10 @@ exports.markAsArrived = catchAsync(async (req, res, next) => {
   });
 });
 
-// Owner confirms booking (after driver has arrived)
+// ✅ Owner confirms booking and starts timer
 exports.confirmBooking = catchAsync(async (req, res, next) => {
   const booking = await Booking.findById(req.params.id)
-    .populate('parking', 'owner name address')
+    .populate('parking', 'owner name address pricePerHour')
     .populate('user', 'name phone');
 
   if (!booking) {
@@ -441,22 +437,26 @@ exports.confirmBooking = catchAsync(async (req, res, next) => {
     return next(new AppError(400, 'Cannot confirm booking more than 30 minutes before start time'));
   }
 
+  // ✅ START THE TIMER - Record actual start time
   booking.isConfirmed = true;
-  booking.status = 'active'; // Change status to active when confirmed by owner
+  booking.status = 'active';
+  booking.actualStartTime = now; // Record when parking actually starts
+  
   await booking.save();
 
   // ✅ Send notification to driver
   try {
     const notification = await Notification.create({
-      user: booking.user._id, // This is the driver's user ID
-      title: 'Booking Confirmed! ✅',
-      message: `Your booking for ${booking.parking.name} has been confirmed by the owner. You can now proceed to the parking location.`,
+      user: booking.user._id,
+      title: 'تم تأكيد الحجز! ✅',
+      message: `تم تأكيد حجزك في ${booking.parking.name}. بدأ وقت الانتظار الآن.`,
       type: 'booking_confirmed',
       relatedBooking: booking._id,
       metadata: {
         parkingId: booking.parking._id,
         parkingName: booking.parking.name,
         isConfirmed: true,
+        actualStartTime: booking.actualStartTime,
       }
     });
 
@@ -468,15 +468,104 @@ exports.confirmBooking = catchAsync(async (req, res, next) => {
 
   res.status(200).json({
     success: true,
-    message: 'Booking confirmed successfully. Parking spot is now active.',
-    data: booking,
+    message: 'Booking confirmed successfully. Timer started.',
+    data: {
+      ...booking.toObject(),
+      timerInfo: {
+        actualStartTime: booking.actualStartTime,
+        bookedDuration: booking.duration * 60, // in minutes
+        elapsedTime: 0, // Just started
+        remainingTime: booking.duration * 60, // in minutes
+      }
+    },
   });
 });
 
-// Get booking status (for both driver and owner)
+// ✅ Complete booking and calculate final charges
+exports.completeBooking = catchAsync(async (req, res, next) => {
+  const booking = await Booking.findById(req.params.id)
+    .populate('parking', 'owner name pricePerHour');
+
+  if (!booking) {
+    return next(new AppError(404, 'Booking not found'));
+  }
+
+  // Check if user is the parking owner
+  if (booking.parking.owner.toString() !== req.user.id) {
+    return next(new AppError(403, 'Only parking owner can complete bookings'));
+  }
+
+  if (booking.status !== 'active') {
+    return next(new AppError(400, 'Can only complete active bookings'));
+  }
+
+  if (!booking.actualStartTime) {
+    return next(new AppError(400, 'Booking has no actual start time'));
+  }
+
+  const now = new Date();
+  
+  // Calculate actual duration
+  booking.actualEndTime = now;
+  booking.actualDuration = Math.floor((now - booking.actualStartTime) / (1000 * 60)); // in minutes
+
+  // Calculate overstay charges if applicable
+  if (booking.isOverstayed) {
+    await booking.calculateOverstayCharge();
+  }
+
+  booking.status = 'completed';
+  await booking.save();
+
+  // Send notification to driver
+  try {
+    const overstayMessage = booking.overstayCharge > 0
+      ? ` تجاوزت الوقت المحجوز بـ ${booking.overstayDuration} دقيقة. رسوم إضافية: ${booking.overstayCharge.toFixed(2)} درهم.`
+      : '';
+
+    await Notification.create({
+      user: booking.user,
+      title: 'اكتمل الحجز! 🏁',
+      message: `اكتمل حجزك في ${booking.parking.name}. المدة الفعلية: ${booking.actualDuration} دقيقة.${overstayMessage}`,
+      type: 'booking_completed',
+      relatedBooking: booking._id,
+      metadata: {
+        parkingId: booking.parking._id,
+        parkingName: booking.parking.name,
+        actualDuration: booking.actualDuration,
+        overstayDuration: booking.overstayDuration,
+        overstayCharge: booking.overstayCharge,
+        totalAmount: booking.totalAmount + booking.overstayCharge,
+      }
+    });
+
+    console.log('📧 Booking completion notification sent to driver');
+
+  } catch (notificationError) {
+    console.error('Failed to send completion notification:', notificationError);
+  }
+
+  res.status(200).json({
+    success: true,
+    message: 'Booking completed successfully',
+    data: {
+      ...booking.toObject(),
+      summary: {
+        actualDuration: booking.actualDuration,
+        bookedDuration: booking.duration * 60,
+        overstayDuration: booking.overstayDuration,
+        originalAmount: booking.totalAmount,
+        overstayCharge: booking.overstayCharge,
+        finalAmount: booking.totalAmount + booking.overstayCharge,
+      }
+    },
+  });
+});
+
+// ✅ Get booking status with timer information
 exports.getBookingStatus = catchAsync(async (req, res, next) => {
   const booking = await Booking.findById(req.params.id)
-    .populate('parking', 'name address owner')
+    .populate('parking', 'name address owner pricePerHour')
     .populate('user', 'name phone');
 
   if (!booking) {
@@ -489,10 +578,23 @@ exports.getBookingStatus = catchAsync(async (req, res, next) => {
     return next(new AppError(403, 'Access denied to this booking'));
   }
 
+  // Calculate timer information
+  const timerInfo = {
+    actualStartTime: booking.actualStartTime,
+    actualEndTime: booking.actualEndTime,
+    bookedDuration: booking.duration * 60, // in minutes
+    elapsedTime: booking.elapsedTime, // in minutes
+    remainingTime: booking.remainingTime, // in minutes
+    isOverstayed: booking.isOverstayed,
+    overstayDuration: booking.overstayDuration,
+    overstayCharge: booking.overstayCharge,
+  };
+
   res.status(200).json({
     success: true,
     data: {
       booking,
+      timerInfo,
       statusInfo: {
         isArrived: booking.isArrived,
         isConfirmed: booking.isConfirmed,
@@ -503,7 +605,9 @@ exports.getBookingStatus = catchAsync(async (req, res, next) => {
         canConfirm: booking.parking.owner.toString() === req.user.id &&
           !booking.isConfirmed &&
           booking.isArrived &&
-          booking.status === 'confirmed'
+          booking.status === 'confirmed',
+        canComplete: booking.parking.owner.toString() === req.user.id &&
+          booking.status === 'active',
       }
     },
   });

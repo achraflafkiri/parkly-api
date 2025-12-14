@@ -61,6 +61,24 @@ const bookingSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // ✅ Actual parking time tracking
+    actualStartTime: {
+      type: Date, // When owner confirms and parking actually starts
+    },
+    actualEndTime: {
+      type: Date, // When parking actually ends
+    },
+    actualDuration: {
+      type: Number, // Actual duration in minutes
+    },
+    overstayDuration: {
+      type: Number, // Minutes exceeded beyond booking duration
+      default: 0,
+    },
+    overstayCharge: {
+      type: Number, // Additional charge for overstay
+      default: 0,
+    },
   },
   { 
     timestamps: true,
@@ -87,6 +105,33 @@ bookingSchema.virtual('isActive').get(function() {
 bookingSchema.virtual('isUpcoming').get(function() {
   const now = new Date();
   return this.startTime > now && this.status === 'confirmed';
+});
+
+// ✅ Virtual for elapsed parking time (in minutes)
+bookingSchema.virtual('elapsedTime').get(function() {
+  if (!this.actualStartTime) return 0;
+  
+  const endTime = this.actualEndTime || new Date();
+  const elapsed = Math.floor((endTime - this.actualStartTime) / (1000 * 60));
+  return elapsed;
+});
+
+// ✅ Virtual for remaining time (in minutes)
+bookingSchema.virtual('remainingTime').get(function() {
+  if (!this.actualStartTime) return this.duration * 60; // Return booking duration in minutes
+  
+  const bookedDurationMinutes = this.duration * 60;
+  const elapsed = this.elapsedTime;
+  const remaining = bookedDurationMinutes - elapsed;
+  
+  return remaining > 0 ? remaining : 0;
+});
+
+// ✅ Virtual for checking if overstayed
+bookingSchema.virtual('isOverstayed').get(function() {
+  if (!this.actualStartTime || this.status === 'completed') return false;
+  
+  return this.elapsedTime > (this.duration * 60);
 });
 
 // Index for better query performance
@@ -119,7 +164,25 @@ bookingSchema.methods.generateQRCode = function() {
   return this.qrCode;
 };
 
-
+// ✅ Method to calculate overstay charges
+bookingSchema.methods.calculateOverstayCharge = async function() {
+  if (!this.isOverstayed) return 0;
+  
+  const parking = await mongoose.model('Parking').findById(this.parking);
+  if (!parking) return 0;
+  
+  const overstayMinutes = this.elapsedTime - (this.duration * 60);
+  const overstayHours = Math.ceil(overstayMinutes / 60);
+  
+  // Charge 1.5x the regular rate for overstay
+  const overstayRate = parking.pricePerHour * 1.5;
+  const charge = overstayHours * overstayRate;
+  
+  this.overstayDuration = overstayMinutes;
+  this.overstayCharge = charge;
+  
+  return charge;
+};
 
 const Booking = mongoose.model('Booking', bookingSchema);
 module.exports = Booking;

@@ -95,6 +95,10 @@ const parkingSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    isPublic: {
+      type: Boolean,
+      default: true,
+    },
   },
   { timestamps: true }
 );
